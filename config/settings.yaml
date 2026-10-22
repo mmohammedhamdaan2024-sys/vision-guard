@@ -1,0 +1,48 @@
+app:
+  name: "Vision Guard"
+  tagline: "AI-Powered Traffic Violation Detection & Road Safety Monitoring System"
+  version: "1.0.0"
+  institution: "B.Sc. Computer Science Major Project"
+  author: "Vision Guard Project Team"
+
+auth:
+  demo_users:
+    admin:
+      password: "visionguard2026"
+      role: "Chief Surveillance Officer"
+    officer:
+      password: "traffic123"
+      role: "Field Review Officer"
+
+storage:
+  database_path: "data/visionguard.db"
+  evidence_dir: "evidence"
+  reports_dir: "data/reports"
+  samples_dir: "samples"
+
+models:
+  yolo_base: "models/yolov8n.pt"
+  helmet_model: "models/helmet_yolo.pt"
+  seatbelt_model: "models/seatbelt_yolo.pt"
+  device: "cpu" # 'cpu' or 'cuda'
+
+thresholds:
+  vehicle_confidence: 0.45
+  helmet_confidence: 0.50
+  seatbelt_confidence: 0.50
+  plate_confidence: 0.40
+  dark_tint_threshold: 65.0       # Experimental apparent darkness %
+  mirror_visibility_threshold: 60.0 # Experimental visibility %
+
+fines:
+  helmet_violation: 1000
+  seatbelt_violation: 1000
+  dark_tint_violation: 750
+  mirror_obscured: 500
+  unregistered_plate: 2000
+  currency_symbol: "₹"
+
+video:
+  frame_skip: 3           # Process every Nth frame for smooth CPU performance
+  display_width: 854
+  display_height: 480
