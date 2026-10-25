@@ -136,11 +136,12 @@ VisionGuard/
 │   └── challan_manager.py      # Mock citation manager, approvals, & PDF/SMS
 │
 ├── pages/
-│   ├── 1_Live_Monitoring.py    # Real-time hardware camera & webcam surveillance feed
-│   ├── 2_Video_Analysis.py     # Recorded video analysis, incursion tracking & MP4 export
-│   ├── 3_Violation_Records.py  # Forensic audit registry & human-in-the-loop review
-│   ├── 4_Reports_Analytics.py  # Macro safety analytics, Plotly charts & PDF audit reports
-│   └── 5_Model_Information.py  # Model specs, hardware diagnostics & training pipeline
+│   ├── 1_Webcam_Helmet_Testing.py # Mode A: Real-time personal webcam helmet detection & temporal smoothing
+│   ├── 2_Highway_Surveillance.py  # Mode B: Multi-vehicle tracking, rider association, seatbelt & stop-line
+│   ├── 3_Video_Analysis.py        # Recorded video analysis, incursion tracking & MP4 export
+│   ├── 4_Violation_Records.py     # Forensic audit registry & human-in-the-loop review
+│   ├── 5_Reports_Analytics.py     # Macro safety analytics, Plotly charts & PDF audit reports
+│   └── 6_Model_Diagnostics.py     # Model specs, hardware diagnostics & training pipeline
 │
 ├── scripts/
 │   ├── prepare_dataset.py      # Dataset splitter & YOLO annotation validator
@@ -156,6 +157,7 @@ VisionGuard/
 │
 ├── models/
 │   ├── README.md               # Model setup, classes, and training guide
+│   ├── helmet_detector.pt      # Trained YOLOv8 Helmet Detection weights (With/Without Helmet)
 │   └── yolov8n.pt              # Ultralytics YOLOv8 nano base model
 │
 ├── samples/                    # Bundled test images and synthetic traffic video

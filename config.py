@@ -27,7 +27,7 @@ DB_PATH = DATA_DIR / "visionguard.db"
 
 # Deep Learning Models
 YOLO_BASE_MODEL = MODELS_DIR / "yolov8n.pt"
-HELMET_MODEL_PATH = MODELS_DIR / "helmet_yolo.pt"
+HELMET_MODEL_PATH = MODELS_DIR / "helmet_detector.pt"
 SEATBELT_MODEL_PATH = MODELS_DIR / "seatbelt_yolo.pt"
 
 # Object Detection Classes (COCO indices for traffic surveillance)
