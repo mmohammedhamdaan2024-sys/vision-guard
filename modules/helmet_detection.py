@@ -20,10 +20,14 @@ class HelmetDetector:
     """Trained YOLOv8 Helmet Detection Engine for personal webcam and highway surveillance."""
 
     def __init__(self, model_path: Optional[str] = None,
+                 custom_model_path: Optional[str] = None,
                  base_model_path: Optional[str] = None,
-                 conf_threshold: float = 0.35):
+                 conf_threshold: float = 0.35,
+                 **kwargs):
         self.conf_threshold = conf_threshold
-        self.model_path = str(model_path or HELMET_MODEL_PATH)
+        target_path = model_path or custom_model_path or str(HELMET_MODEL_PATH)
+        self.model_path = str(target_path)
+        self.custom_model_path = self.model_path
         self.base_model_path = str(base_model_path or (MODELS_DIR / "yolov8n.pt"))
 
         # Load trained helmet model
