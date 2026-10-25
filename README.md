@@ -136,13 +136,16 @@ VisionGuard/
 │   └── challan_manager.py      # Mock citation manager, approvals, & PDF/SMS
 │
 ├── pages/
-│   ├── 1_Dashboard.py          # Real-time KPIs, Plotly charts, and evidence gallery
-│   ├── 2_Traffic_Monitoring.py # Live-style camera simulation and tracking HUD
-│   ├── 3_Violation_Lab.py      # Interactive 5-tab computer vision diagnostic bench
-│   ├── 4_Vehicle_Records.py    # Searchable forensic database and evidence viewer
-│   ├── 5_Challan_Management.py # Challan adjudication, approval, and SMS preview
-│   ├── 6_Analytics_Reports.py  # Statistical charts, CSV export, and audit reports
-│   └── 7_Settings_About.py     # Calibration sliders, fine schedule, & viva guide
+│   ├── 1_Live_Monitoring.py    # Real-time hardware camera & webcam surveillance feed
+│   ├── 2_Video_Analysis.py     # Recorded video analysis, incursion tracking & MP4 export
+│   ├── 3_Violation_Records.py  # Forensic audit registry & human-in-the-loop review
+│   ├── 4_Reports_Analytics.py  # Macro safety analytics, Plotly charts & PDF audit reports
+│   └── 5_Model_Information.py  # Model specs, hardware diagnostics & training pipeline
+│
+├── scripts/
+│   ├── prepare_dataset.py      # Dataset splitter & YOLO annotation validator
+│   ├── train_model.py          # Transfer learning fine-tuning script
+│   └── evaluate_model.py       # Precision, Recall, and mAP evaluation suite
 │
 ├── utils/
 │   ├── ui_components.py        # Reusable CSS, headers, badges, and auth guard

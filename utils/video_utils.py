@@ -70,54 +70,83 @@ def generate_synthetic_traffic_clip(output_path: str, num_frames: int = 75, fps:
     for f in range(num_frames):
         canvas = np.zeros((height, width, 3), dtype=np.uint8)
         # Asphalt
-        canvas[:] = (40, 44, 52)
+        canvas[:] = (38, 42, 48)
 
-        # Highway lane markings
-        offset = (f * 8) % 100
-        for y in range(-50, height + 100, 100):
-            # Center lane dashed yellow
-            cv2.rectangle(canvas, (width // 2 - 4, y + offset), (width // 2 + 4, y + offset + 50), (0, 215, 255), -1)
-            # Left lane dashed white
-            cv2.rectangle(canvas, (width // 4 - 3, y + offset), (width // 4 + 3, y + offset + 50), (240, 240, 240), -1)
-            # Right lane dashed white
-            cv2.rectangle(canvas, (3 * width // 4 - 3, y + offset), (3 * width // 4 + 3, y + offset + 50), (240, 240, 240), -1)
+        # Stop Line across all lanes
+        stop_line_y = 330
+        cv2.rectangle(canvas, (40, stop_line_y), (width - 120, stop_line_y + 8), (255, 255, 255), -1)
+        # Zebra Crosswalk below stop line
+        for zx in range(60, width - 140, 45):
+            cv2.rectangle(canvas, (zx, stop_line_y + 16), (zx + 25, stop_line_y + 55), (230, 230, 230), -1)
 
-        # Vehicle 1: Car moving down in Left-Center Lane
-        car1_y = int(50 + (f * 4.2))
-        car1_x = 240
-        if car1_y < height + 80:
-            cv2.rectangle(canvas, (car1_x, car1_y), (car1_x + 120, car1_y + 190), (30, 40, 160), -1) # Blue car body
-            cv2.rectangle(canvas, (car1_x + 15, car1_y + 40), (car1_x + 105, car1_y + 100), (140, 160, 170), -1) # Windshield
-            # License plate
-            cv2.rectangle(canvas, (car1_x + 30, car1_y + 165), (car1_x + 90, car1_y + 185), (255, 255, 255), -1)
-            cv2.putText(canvas, "MH12AB", (car1_x + 32, car1_y + 180), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 1)
+        # Lane dividers
+        for lx in [width // 3, 2 * width // 3]:
+            for y in range(0, stop_line_y, 40):
+                cv2.rectangle(canvas, (lx - 2, y), (lx + 2, y + 25), (240, 240, 240), -1)
 
-        # Vehicle 2: Motorcycle moving down in Right Lane (No Helmet Rider)
-        bike_y = int(20 + (f * 5.5))
-        bike_x = 580
-        if bike_y < height + 60:
-            # Bike chassis
-            cv2.rectangle(canvas, (bike_x + 15, bike_y + 40), (bike_x + 35, bike_y + 110), (20, 20, 20), -1)
-            # Rider body
-            cv2.rectangle(canvas, (bike_x + 12, bike_y + 25), (bike_x + 38, bike_y + 65), (50, 120, 220), -1)
-            # Rider head (No helmet: exposed skin & dark hair)
-            cv2.circle(canvas, (bike_x + 25, bike_y + 12), 12, (130, 175, 225), -1) # Skin tone
-            cv2.circle(canvas, (bike_x + 25, bike_y + 6), 9, (20, 20, 20), -1) # Hair
-            # Bike small plate
-            cv2.rectangle(canvas, (bike_x + 16, bike_y + 100), (bike_x + 34, bike_y + 112), (255, 255, 255), -1)
+        # Vehicle 1: Blue Car in Left Lane (Slows and stops at traffic signal)
+        car1_prog = min(1.0, f / (num_frames * 0.75))
+        car1_y = int(30 + car1_prog * 120)
+        car1_x = 110
+        # Car body
+        cv2.rectangle(canvas, (car1_x, car1_y), (car1_x + 130, car1_y + 160), (160, 40, 30), -1) # Deep blue
+        # Windshield
+        cv2.rectangle(canvas, (car1_x + 15, car1_y + 35), (car1_x + 115, car1_y + 85), (195, 215, 225), -1)
+        # Driver Head & Visible Fastened Diagonal Seatbelt
+        cv2.circle(canvas, (car1_x + 45, car1_y + 55), 14, (120, 160, 210), -1)
+        # Fastened diagonal black seat-belt strap across torso!
+        cv2.line(canvas, (car1_x + 35, car1_y + 50), (car1_x + 65, car1_y + 85), (20, 20, 20), 4)
+        # Passenger (No belt across)
+        cv2.circle(canvas, (car1_x + 85, car1_y + 55), 14, (120, 160, 210), -1)
+        # License plate
+        cv2.rectangle(canvas, (car1_x + 30, car1_y + 140), (car1_x + 100, car1_y + 155), (255, 255, 255), -1)
+        cv2.putText(canvas, "MH12AB1234", (car1_x + 32, car1_y + 152), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 0, 0), 1)
 
-        # Vehicle 3: White SUV in Right-Center Lane
-        suv_y = int(-100 + (f * 3.8))
-        suv_x = 390
-        if -50 <= suv_y < height + 100:
-            cv2.rectangle(canvas, (suv_x, suv_y), (suv_x + 130, suv_y + 210), (220, 220, 220), -1) # White SUV
-            cv2.rectangle(canvas, (suv_x + 20, suv_y + 40), (suv_x + 110, suv_y + 90), (30, 30, 30), -1) # Dark tinted front windshield!
-            cv2.rectangle(canvas, (suv_x + 35, suv_y + 185), (suv_x + 95, suv_y + 205), (255, 255, 255), -1)
-            cv2.putText(canvas, "DL04XY", (suv_x + 37, suv_y + 200), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 1)
+        # Vehicle 2: Motorcycle Rider in Center Lane (No Helmet Rider)
+        bike_prog = min(1.0, f / (num_frames * 0.7))
+        bike_y = int(20 + bike_prog * 140)
+        bike_x = 360
+        # Motorcycle chassis
+        cv2.rectangle(canvas, (bike_x + 15, bike_y + 40), (bike_x + 35, bike_y + 115), (25, 25, 25), -1)
+        cv2.circle(canvas, (bike_x + 25, bike_y + 115), 12, (10, 10, 10), -1) # Wheel
+        # Rider torso
+        cv2.rectangle(canvas, (bike_x + 10, bike_y + 20), (bike_x + 40, bike_y + 65), (50, 120, 220), -1)
+        # Rider Head (NO HELMET: Exposed skin tone and dark hair)
+        cv2.circle(canvas, (bike_x + 25, bike_y + 10), 13, (120, 160, 210), -1) # Face skin
+        cv2.ellipse(canvas, (bike_x + 25, bike_y + 4), (12, 7), 0, 0, 180, (20, 20, 20), -1) # Hair
+        # Number plate
+        cv2.rectangle(canvas, (bike_x + 14, bike_y + 102), (bike_x + 36, bike_y + 114), (255, 255, 255), -1)
+        cv2.putText(canvas, "DL03", (bike_x + 15, bike_y + 112), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (0, 0, 0), 1)
+
+        # Vehicle 3: White SUV in Right Lane with dark window film
+        suv_prog = min(1.0, f / (num_frames * 0.8))
+        suv_y = int(-10 + suv_prog * 125)
+        suv_x = 475
+        cv2.rectangle(canvas, (suv_x, suv_y), (suv_x + 135, suv_y + 175), (225, 225, 225), -1)
+        # Heavy dark tinted windshield
+        cv2.rectangle(canvas, (suv_x + 18, suv_y + 35), (suv_x + 118, suv_y + 85), (20, 20, 20), -1)
+        # SUV plate
+        cv2.rectangle(canvas, (suv_x + 35, suv_y + 152), (suv_x + 100, suv_y + 168), (255, 255, 255), -1)
+        cv2.putText(canvas, "KA05MN9010", (suv_x + 37, suv_y + 165), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 0, 0), 1)
+
+        # Traffic Signal Light Pole on the Right
+        pole_x = width - 80
+        cv2.rectangle(canvas, (pole_x + 10, 80), (pole_x + 18, height), (70, 75, 80), -1) # Pole
+        # Signal Box
+        cv2.rectangle(canvas, (pole_x - 5, 80), (pole_x + 35, 195), (20, 22, 25), -1)
+        cv2.rectangle(canvas, (pole_x - 5, 80), (pole_x + 35, 195), (100, 105, 110), 2)
+        # Traffic Lights (Red Glowing ON, Yellow Dim, Green Dim)
+        cv2.circle(canvas, (pole_x + 15, 105), 12, (0, 0, 255), -1) # RED LIGHT ON!
+        cv2.circle(canvas, (pole_x + 15, 105), 15, (0, 0, 255), 1)
+        cv2.circle(canvas, (pole_x + 15, 137), 10, (30, 45, 50), -1) # Yellow off
+        cv2.circle(canvas, (pole_x + 15, 168), 10, (20, 40, 20), -1) # Green off
+        cv2.putText(canvas, "SIGNAL: RED", (pole_x - 30, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1)
 
         # Surveillance camera HUD header overlay
-        cv2.putText(canvas, f"CAM-04 [HIGHWAY-EXPRESSWAY] | FRAME: {f:04d} | TIME: 19:45:{f%60:02d}", (20, 30),
+        cv2.putText(canvas, f"TRAFFIC SIGNAL CAM-01 [INTERSECTION JUNCTION] | FRAME: {f:04d}", (20, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(canvas, "ROAD SAFETY AI ACTIVE: SCANNING PASSENGER SEATBELT & RIDER HELMET", (20, 52),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 220, 255), 1, cv2.LINE_AA)
         cv2.circle(canvas, (width - 40, 25), 8, (0, 0, 255), -1) # Blinking REC dot
         cv2.putText(canvas, "REC", (width - 75, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
 

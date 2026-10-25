@@ -1,160 +1,157 @@
 """
-Vision Guard — Seat-belt Detection Module
-Analyzes vehicle occupant compliance using cabin localization, diagonal strap edge analysis,
-Hough transform geometry, and contrast profiling.
+VisionGuard — Seat Belt Detection Module
+Monitors visible front-seat vehicle occupants for safety belt compliance.
+Uses cabin localization, CLAHE contrast enhancement, and diagonal Hough strap geometry.
 """
 
 import os
 import cv2
 import numpy as np
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from ultralytics import YOLO
+
+from config import SEATBELT_MODEL_PATH, SEATBELT_CONFIDENCE_THRESHOLD, COLORS
 
 
 class SeatbeltDetector:
-    def __init__(self, base_yolo_path: str = "models/yolov8n.pt",
-                 custom_seatbelt_model_path: str = "models/seatbelt_yolo.pt",
-                 conf_thresh: float = 0.50):
-        self.conf_thresh = conf_thresh
-        self.custom_model_path = custom_seatbelt_model_path
-        self.base_model_path = base_yolo_path
+    """Analyzes passenger vehicle cabin for driver and front occupant seat-belt presence."""
 
-        self.base_model = None
-        if os.path.exists(base_yolo_path):
-            self.base_model = YOLO(base_yolo_path)
+    def __init__(self, custom_model_path: Optional[str] = None,
+                 conf_threshold: float = SEATBELT_CONFIDENCE_THRESHOLD):
+        self.conf_threshold = conf_threshold
+        self.custom_model_path = custom_model_path or str(SEATBELT_MODEL_PATH)
+        self.has_custom_model = os.path.exists(self.custom_model_path)
+        self.custom_model: Optional[YOLO] = None
 
-        self.has_custom_model = os.path.exists(custom_seatbelt_model_path)
-        self.custom_model = None
         if self.has_custom_model:
             try:
-                self.custom_model = YOLO(custom_seatbelt_model_path)
+                self.custom_model = YOLO(self.custom_model_path)
             except Exception as e:
                 print(f"Warning: Could not load custom seatbelt model: {e}")
                 self.has_custom_model = False
 
-    def analyze(self, image: np.ndarray) -> Dict[str, Any]:
+    def analyze(self, frame: np.ndarray, vehicle_box: Optional[List[int]] = None) -> Dict[str, Any]:
         """
-        Analyzes vehicle image for occupant seat-belt compliance.
+        Analyzes a car/vehicle for occupant seat belt compliance.
         Returns:
-            - status: 'Seat belt detected' | 'Possible seat-belt violation' | 'Unable to determine' | 'No vehicle detected'
+            - status: 'Seat belt detected' | 'Possible seat-belt violation' | 'Unable to determine'
             - confidence: float
             - cabin_box: [x1, y1, x2, y2]
             - occupant_crop: np.ndarray
-            - annotated_image: np.ndarray
-            - diagnostics: dict
+            - box_color: (B, G, R) tuple
+            - details: dict
         """
-        annotated = image.copy()
-        h, w = image.shape[:2]
+        if frame is None:
+            return {"status": "Unable to determine", "confidence": 0.0, "cabin_box": None, "occupant_crop": None}
 
-        if self.base_model is None:
-            return {
-                "status": "Unable to determine",
-                "confidence": 0.0,
-                "annotated_image": annotated,
-                "occupant_crop": None,
-                "diagnostics": {"error": "Base model not initialized"}
-            }
+        h, w = frame.shape[:2]
 
-        # Run base YOLO to detect 4-wheeled vehicles: car (2), bus (5), truck (7)
-        results = self.base_model(image, verbose=False, conf=0.35)[0]
-        boxes = results.boxes.xyxy.cpu().numpy()
-        classes = results.boxes.cls.cpu().numpy().astype(int)
-        confs = results.boxes.conf.cpu().numpy()
+        if vehicle_box is not None:
+            vx1, vy1, vx2, vy2 = [int(v) for v in vehicle_box]
+        else:
+            vx1, vy1, vx2, vy2 = 0, 0, w, h
 
-        target_box = None
-        target_conf = 0.0
-        for box, cls_id, conf in zip(boxes, classes, confs):
-            if cls_id in (2, 5, 7): # car, bus, truck
-                target_box = box
-                target_conf = conf
-                break
-
-        if target_box is None:
-            # Check if this is already an occupant or windshield crop
-            if w > 80 and h > 80:
-                target_box = [0, 0, w, h]
-                target_conf = 0.8
-            else:
-                return {
-                    "status": "No vehicle detected",
-                    "confidence": 0.0,
-                    "annotated_image": annotated,
-                    "occupant_crop": None,
-                    "diagnostics": {"message": "No four-wheeled passenger vehicle detected in frame"}
-                }
-
-        # Extract cabin / windshield zone
-        # Front windshield typically sits in upper 20% to 65% of the vehicle height and central 60% of width
-        vx1, vy1, vx2, vy2 = [int(v) for v in target_box]
+        vx1, vy1 = max(0, vx1), max(0, vy1)
+        vx2, vy2 = min(w, vx2), min(h, vy2)
         vw = vx2 - vx1
         vh = vy2 - vy1
 
+        if vw < 40 or vh < 40:
+            return {
+                "status": "Unable to determine",
+                "confidence": 0.30,
+                "cabin_box": None,
+                "occupant_crop": None,
+                "box_color": COLORS["uncertain"],
+                "details": {"reason": "Vehicle resolution too low"}
+            }
+
+        # Windshield / Cabin Zone: upper 15% to 62% of vehicle height, middle 70% of width
         cx1 = max(0, vx1 + int(vw * 0.15))
         cx2 = min(w, vx2 - int(vw * 0.15))
-        cy1 = max(0, vy1 + int(vh * 0.15))
-        cy2 = min(h, vy1 + int(vh * 0.65))
+        cy1 = max(0, vy1 + int(vh * 0.14))
+        cy2 = min(h, vy1 + int(vh * 0.62))
 
-        if (cx2 - cx1) < 40 or (cy2 - cy1) < 40:
+        cabin_box = [cx1, cy1, cx2, cy2]
+        cabin_crop = frame[cy1:cy2, cx1:cx2].copy() if (cx2 > cx1 and cy2 > cy1) else None
+
+        if cabin_crop is None or cabin_crop.size == 0 or cabin_crop.shape[0] < 20 or cabin_crop.shape[1] < 20:
             return {
                 "status": "Unable to determine",
                 "confidence": 0.35,
-                "annotated_image": annotated,
+                "cabin_box": cabin_box,
                 "occupant_crop": None,
-                "diagnostics": {"reason": "Vehicle resolution too low or occupant cabin occluded"}
+                "box_color": COLORS["uncertain"],
+                "details": {"reason": "Windshield cabin crop insufficient"}
             }
 
-        cabin_crop = image[cy1:cy2, cx1:cx2].copy()
+        # Check lighting conditions and glare
+        gray = cv2.cvtColor(cabin_crop, cv2.COLOR_BGR2GRAY)
+        mean_lum = float(np.mean(gray))
+        contrast_std = float(np.std(gray))
 
-        # Check lighting conditions and glare in cabin
-        gray_cabin = cv2.cvtColor(cabin_crop, cv2.COLOR_BGR2GRAY)
-        mean_brightness = np.mean(gray_cabin)
-        std_brightness = np.std(gray_cabin)
-
-        if mean_brightness < 28 or mean_brightness > 235 or std_brightness < 12:
-            # Harsh glare or extreme shadow
-            status = "Unable to determine"
-            conf = 0.45
-            diag = {
-                "reason": "Adverse lighting, windshield glare, or dark tint occlusion",
-                "mean_brightness": round(float(mean_brightness), 1),
-                "contrast_std": round(float(std_brightness), 1)
+        if mean_lum < 25 or mean_lum > 238 or contrast_std < 10:
+            return {
+                "status": "Unable to determine",
+                "confidence": 0.40,
+                "cabin_box": cabin_box,
+                "occupant_crop": cabin_crop,
+                "box_color": COLORS["uncertain"],
+                "details": {"reason": "Adverse lighting, reflection, or opaque window tint"}
             }
-        else:
-            status, conf, diag = self._analyze_diagonal_belt(cabin_crop)
 
-        # Draw HUD annotation
-        color = (0, 255, 0) if status == "Seat belt detected" else ((0, 0, 255) if status == "Possible seat-belt violation" else (0, 200, 255))
-        cv2.rectangle(annotated, (cx1, cy1), (cx2, cy2), color, 2)
-        cv2.putText(annotated, f"{status} ({conf:.2f})", (cx1, max(20, cy1 - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+        # Deep Model vs Diagonal Hough Edge Profiler
+        if self.has_custom_model and self.custom_model is not None:
+            try:
+                preds = self.custom_model(cabin_crop, verbose=False, conf=0.35)[0]
+                if len(preds.boxes) > 0:
+                    cls_id = int(preds.boxes.cls[0].item())
+                    score = float(preds.boxes.conf[0].item())
+                    status = "Seat belt detected" if cls_id == 0 else "Possible seat-belt violation"
+                    color = COLORS["compliant"] if cls_id == 0 else COLORS["violation"]
+                    return {
+                        "status": status,
+                        "confidence": round(score, 2),
+                        "cabin_box": cabin_box,
+                        "occupant_crop": cabin_crop,
+                        "box_color": color,
+                        "details": {"mode": "deep_yolo_weights"}
+                    }
+            except Exception as e:
+                print(f"Custom seatbelt model fallback: {e}")
+
+        # Computer Vision Diagonal Strap Edge Profiling
+        status, conf, diag = self._cv_strap_analyzer(cabin_crop)
+        box_color = COLORS["compliant"] if status == "Seat belt detected" else (
+            COLORS["violation"] if status == "Possible seat-belt violation" else COLORS["uncertain"]
+        )
 
         return {
             "status": status,
             "confidence": round(conf, 2),
-            "cabin_box": [cx1, cy1, cx2, cy2],
+            "cabin_box": cabin_box,
             "occupant_crop": cabin_crop,
-            "annotated_image": annotated,
-            "diagnostics": diag
+            "box_color": box_color,
+            "details": diag
         }
 
-    def _analyze_diagonal_belt(self, cabin_bgr: np.ndarray) -> Tuple[str, float, Dict[str, Any]]:
+    def _cv_strap_analyzer(self, cabin_bgr: np.ndarray) -> Tuple[str, float, Dict[str, Any]]:
         """
-        Analyzes torso diagonal strap geometry using:
-        - Multi-angle edge filtering (detecting lines angled at 25° to 65°)
-        - Hough Line Transform
-        - Intensity contrast along candidate strap vectors
+        Enhances windshield contrast with CLAHE and searches for diagonal line segments
+        angled between 28° and 68° corresponding to shoulder-to-opposite-hip strap orientation.
         """
         ch, cw = cabin_bgr.shape[:2]
         gray = cv2.cvtColor(cabin_bgr, cv2.COLOR_BGR2GRAY)
-        # CLAHE contrast enhancement to penetrate light windshield tint
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+        # CLAHE enhancement
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray)
 
-        edges = cv2.Canny(enhanced, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=25, minLineLength=int(ch * 0.25), maxLineGap=12)
+        edges = cv2.Canny(enhanced, 45, 140)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=22, minLineLength=int(ch * 0.25), maxLineGap=12)
 
-        diagonal_line_count = 0
-        strongest_diagonal_score = 0.0
+        diagonal_straps = 0
+        max_strap_ratio = 0.0
 
         if lines is not None:
             for line in lines:
@@ -163,26 +160,23 @@ class SeatbeltDetector:
                 dy = abs(y2 - y1)
                 if dx == 0:
                     continue
-                angle_deg = np.degrees(np.arctan2(dy, dx))
-                # Seatbelt diagonal geometry is typically between 28 and 65 degrees
-                if 28 <= angle_deg <= 68:
-                    line_len = np.sqrt(dx ** 2 + dy ** 2)
-                    if line_len > 0.3 * ch:
-                        diagonal_line_count += 1
-                        strongest_diagonal_score = max(strongest_diagonal_score, line_len / ch)
+                angle = np.degrees(np.arctan2(dy, dx))
+                if 28 <= angle <= 68:
+                    length = np.sqrt(dx ** 2 + dy ** 2)
+                    if length > 0.28 * ch:
+                        diagonal_straps += 1
+                        max_strap_ratio = max(max_strap_ratio, length / ch)
 
         diag = {
-            "diagonal_lines_detected": diagonal_line_count,
-            "strap_length_ratio": round(float(strongest_diagonal_score), 3),
-            "enhanced_contrast": True
+            "diagonal_straps_found": diagonal_straps,
+            "strap_length_ratio": round(float(max_strap_ratio), 3),
+            "method": "CLAHE contrast + Hough directional line transformation"
         }
 
-        if diagonal_line_count >= 2 or strongest_diagonal_score > 0.45:
-            conf = min(0.93, 0.65 + (strongest_diagonal_score * 0.3))
+        if diagonal_straps >= 1 and max_strap_ratio > 0.35:
+            conf = min(0.93, 0.68 + (max_strap_ratio * 0.25))
             return "Seat belt detected", conf, diag
-        elif diagonal_line_count == 0 and strongest_diagonal_score < 0.2:
-            # Clear cabin view but absent diagonal strap
-            conf = 0.78
-            return "Possible seat-belt violation", conf, diag
+        elif diagonal_straps == 0 and max_strap_ratio < 0.15:
+            return "Possible seat-belt violation", 0.82, diag
         else:
             return "Unable to determine", 0.50, diag

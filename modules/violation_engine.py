@@ -1,285 +1,185 @@
 """
-Vision Guard — Violation Decision Engine
-Aggregates detections across helmet, seat-belt, window tint, mirror, and plate OCR modules.
-Enforces multi-tier confidence rules, handles uncertainty, saves evidence images,
-and persists violation and challan records.
+VisionGuard — Violation Engine Module
+Rule-based decision logic integrating detection results across helmet, seatbelt,
+traffic signal stop-line crossing, and vehicle motion modules.
+Enforces duplicate-event suppression and saves watermarked forensic evidence images.
 """
 
 import os
 import cv2
 import time
-import numpy as np
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
+import numpy as np
 
-from database.db_manager import DatabaseManager
-from utils.image_utils import safe_crop
+from config import EVIDENCE_DIR, COLORS
+from modules.event_storage import EventStorage
 
 
-class ViolationDecisionEngine:
-    def __init__(self, db_manager: DatabaseManager,
-                 evidence_dir: str = "evidence",
-                 config_thresholds: Optional[Dict[str, Any]] = None,
-                 config_fines: Optional[Dict[str, Any]] = None):
-        self.db = db_manager
-        self.evidence_dir = evidence_dir
+class ViolationEngine:
+    """Combines detection pipeline outputs, applies safety rules, and generates violation records."""
+
+    def __init__(self, event_storage: EventStorage, evidence_dir: Optional[str] = None):
+        self.storage = event_storage
+        self.evidence_dir = str(evidence_dir or EVIDENCE_DIR)
         os.makedirs(self.evidence_dir, exist_ok=True)
 
-        # Thresholds
-        self.thresholds = config_thresholds or {
-            "helmet_confidence": 0.50,
-            "seatbelt_confidence": 0.50,
-            "dark_tint_threshold": 65.0,
-            "mirror_visibility_threshold": 60.0,
-            "plate_confidence": 0.40
-        }
+        # Feature flags for additional road safety modules
+        self.wrong_way_enabled = True
+        self.expected_direction = "downward"  # Standard traffic flow direction in camera FOV
 
-        # Demonstration Fine Schedule
-        self.fines = config_fines or {
-            "helmet_violation": 1000,
-            "seatbelt_violation": 1000,
-            "dark_tint_violation": 750,
-            "mirror_obscured": 500,
-            "unregistered_plate": 2000
-        }
-
-    def evaluate_vehicle_event(self,
-                               frame: np.ndarray,
-                               tracking_id: str,
-                               vehicle_type: str,
-                               vehicle_box: List[int],
-                               helmet_result: Optional[Dict[str, Any]] = None,
-                               seatbelt_result: Optional[Dict[str, Any]] = None,
-                               tint_result: Optional[Dict[str, Any]] = None,
-                               mirror_result: Optional[Dict[str, Any]] = None,
-                               plate_result: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def evaluate(self, frame: np.ndarray, tracked_object: Any,
+                 helmet_result: Optional[Dict[str, Any]] = None,
+                 seatbelt_result: Optional[Dict[str, Any]] = None,
+                 traffic_signal_result: Optional[Tuple[bool, Dict[str, Any]]] = None,
+                 camera_source: str = "Live Camera") -> List[Dict[str, Any]]:
         """
-        Evaluates a detected/tracked vehicle against all road safety rules.
-        Returns a list of violation/review records generated for this event.
+        Evaluates a tracked road user for road safety infractions.
+        Returns a list of generated violation items.
         """
         generated_violations = []
+        track_id = tracked_object.track_id
+        vtype = tracked_object.class_name
+        vbox = tracked_object.bbox
 
-        # Plate metadata
-        plate_number = "UNREADABLE"
-        plate_conf = 0.0
-        if plate_result:
-            plate_number = plate_result.get("plate_number", "UNREADABLE")
-            plate_conf = plate_result.get("confidence", 0.0)
-
-        # Upsert vehicle record in DB
-        existing_vehicle = self.db.get_vehicle_by_tracking_id(tracking_id)
-        if not existing_vehicle:
-            vehicle_crop = safe_crop(frame, vehicle_box, margin=0.1)
-            snapshot_filename = f"VEH_{tracking_id}_{int(time.time())}.jpg"
-            snapshot_path = os.path.join(self.evidence_dir, snapshot_filename)
-            cv2.imwrite(snapshot_path, vehicle_crop)
-
-            vehicle_id = self.db.add_vehicle(
-                tracking_id=tracking_id,
-                vehicle_type=vehicle_type,
-                plate_number=plate_number,
-                plate_confidence=plate_conf,
-                snapshot_path=snapshot_path
-            )
-        else:
-            vehicle_id = existing_vehicle["id"]
-            if plate_number != "UNREADABLE" and existing_vehicle["plate_number"] == "UNREADABLE":
-                self.db.update_vehicle_plate(tracking_id, plate_number, plate_conf)
-
-        # Rule 1: Motorcycle Rider Helmet Check
-        if vehicle_type == "motorcycle" and helmet_result:
+        # -------------------------------------------------------------
+        # 1. Motorcycle Rider Helmet Check
+        # -------------------------------------------------------------
+        if vtype == "motorcycle" and helmet_result:
             h_status = helmet_result.get("status")
             h_conf = helmet_result.get("confidence", 0.0)
 
-            if h_status == "No helmet detected":
-                severity = "Critical" if h_conf >= self.thresholds["helmet_confidence"] else "Review"
-                review_status = "Pending Review"
-                evid_path = self._save_evidence_crop(frame, vehicle_box, tracking_id, "HELMET_VIOLATION")
-                notes = f"Rider identified without protective headgear (Detection confidence: {h_conf:.2f})."
-                fine = self.fines.get("helmet_violation", 1000)
-
-                v_id = self.db.add_violation(
-                    vehicle_id=vehicle_id,
-                    tracking_id=tracking_id,
-                    violation_type="Helmet Violation",
-                    severity=severity,
-                    confidence=h_conf,
+            if h_status == "No helmet detected" and not tracked_object.has_violation("Helmet Violation"):
+                evid_path = self._save_evidence_crop(frame, vbox, track_id, "HELMET_VIOLATION")
+                notes = f"Two-wheeler rider identified without protective helmet (Confidence: {h_conf:.2f})."
+                event_id = self.storage.log_event(
+                    violation_category="Helmet Violation",
+                    tracking_id=track_id,
+                    vehicle_type=vtype,
+                    confidence_score=h_conf,
                     evidence_path=evid_path,
-                    status=review_status,
-                    review_notes=notes
+                    camera_source=camera_source,
+                    review_status="Pending Review",
+                    reviewer_notes=notes
                 )
-                challan_ref = self.db.create_challan(
-                    violation_id=v_id,
-                    vehicle_plate=plate_number,
-                    violation_type="Helmet Violation",
-                    fine_amount=fine,
-                    evidence_path=evid_path,
-                    notes=notes
-                )
+                tracked_object.mark_violation("Helmet Violation")
                 generated_violations.append({
-                    "violation_id": v_id,
-                    "challan_ref": challan_ref,
-                    "violation_type": "Helmet Violation",
-                    "severity": severity,
-                    "status": review_status,
-                    "fine": fine,
-                    "notes": notes,
-                    "evidence_path": evid_path
+                    "event_id": event_id,
+                    "category": "Helmet Violation",
+                    "confidence": h_conf,
+                    "evidence_path": evid_path,
+                    "notes": notes
                 })
 
-            elif h_status == "Uncertain / not visible":
-                evid_path = self._save_evidence_crop(frame, vehicle_box, tracking_id, "HELMET_UNCERTAIN")
-                notes = f"Head region obscured or confidence below threshold ({h_conf:.2f}). Manual review required."
-                v_id = self.db.add_violation(
-                    vehicle_id=vehicle_id,
-                    tracking_id=tracking_id,
-                    violation_type="Helmet Uncertain Review",
-                    severity="Review",
-                    confidence=h_conf,
-                    evidence_path=evid_path,
-                    status="Pending Review",
-                    review_notes=notes
-                )
-                generated_violations.append({
-                    "violation_id": v_id,
-                    "violation_type": "Helmet Uncertain Review",
-                    "severity": "Review",
-                    "status": "Pending Review",
-                    "notes": notes,
-                    "evidence_path": evid_path
-                })
-
-        # Rule 2: Occupant Seat-belt Check (Cars, Buses, Trucks)
-        if vehicle_type in ("car", "bus", "truck") and seatbelt_result:
+        # -------------------------------------------------------------
+        # 2. Vehicle Occupant Seat-Belt Check
+        # -------------------------------------------------------------
+        if vtype in ("car", "truck", "bus") and seatbelt_result:
             s_status = seatbelt_result.get("status")
             s_conf = seatbelt_result.get("confidence", 0.0)
 
-            if s_status == "Possible seat-belt violation":
-                severity = "Critical" if s_conf >= self.thresholds["seatbelt_confidence"] else "Review"
-                review_status = "Pending Review"
-                evid_path = self._save_evidence_crop(frame, vehicle_box, tracking_id, "SEATBELT_VIOLATION")
-                notes = f"Cabin occupant observed without visible fastened diagonal safety belt (Confidence: {s_conf:.2f})."
-                fine = self.fines.get("seatbelt_violation", 1000)
-
-                v_id = self.db.add_violation(
-                    vehicle_id=vehicle_id,
-                    tracking_id=tracking_id,
-                    violation_type="Seat-belt Violation",
-                    severity=severity,
-                    confidence=s_conf,
+            if s_status == "Possible seat-belt violation" and not tracked_object.has_violation("Seat-Belt Violation"):
+                evid_path = self._save_evidence_crop(frame, vbox, track_id, "SEATBELT_VIOLATION")
+                notes = f"Visible front-seat occupant unfastened across cabin (Confidence: {s_conf:.2f})."
+                event_id = self.storage.log_event(
+                    violation_category="Seat-Belt Violation",
+                    tracking_id=track_id,
+                    vehicle_type=vtype,
+                    confidence_score=s_conf,
                     evidence_path=evid_path,
-                    status=review_status,
-                    review_notes=notes
+                    camera_source=camera_source,
+                    review_status="Pending Review",
+                    reviewer_notes=notes
                 )
-                challan_ref = self.db.create_challan(
-                    violation_id=v_id,
-                    vehicle_plate=plate_number,
-                    violation_type="Seat-belt Violation",
-                    fine_amount=fine,
-                    evidence_path=evid_path,
-                    notes=notes
-                )
+                tracked_object.mark_violation("Seat-Belt Violation")
                 generated_violations.append({
-                    "violation_id": v_id,
-                    "challan_ref": challan_ref,
-                    "violation_type": "Seat-belt Violation",
-                    "severity": severity,
-                    "status": review_status,
-                    "fine": fine,
-                    "notes": notes,
-                    "evidence_path": evid_path
+                    "event_id": event_id,
+                    "category": "Seat-Belt Violation",
+                    "confidence": s_conf,
+                    "evidence_path": evid_path,
+                    "notes": notes
                 })
 
-            elif s_status == "Unable to determine":
-                # Do not trigger confirmed fine for reflection/adverse lighting
-                pass
+        # -------------------------------------------------------------
+        # 3. Red Light Stop-Line Violation
+        # -------------------------------------------------------------
+        if traffic_signal_result:
+            is_red_viol, sig_details = traffic_signal_result
+            if is_red_viol and not tracked_object.has_violation("Red Light Stop-Line Violation"):
+                evid_path = self._save_evidence_crop(frame, vbox, track_id, "RED_LIGHT_VIOLATION")
+                notes = f"Vehicle traversed past virtual stop-line during active RED traffic light."
+                event_id = self.storage.log_event(
+                    violation_category="Red Light Stop-Line Violation",
+                    tracking_id=track_id,
+                    vehicle_type=vtype,
+                    confidence_score=0.92,
+                    evidence_path=evid_path,
+                    camera_source=camera_source,
+                    review_status="Pending Review",
+                    reviewer_notes=notes
+                )
+                tracked_object.mark_violation("Red Light Stop-Line Violation")
+                generated_violations.append({
+                    "event_id": event_id,
+                    "category": "Red Light Stop-Line Violation",
+                    "confidence": 0.92,
+                    "evidence_path": evid_path,
+                    "notes": notes
+                })
 
-        # Rule 3: Window Tint & Visibility Assessment
-        if tint_result and tint_result.get("status") == "Flagged for Dark Window Review":
-            darkness = tint_result.get("darkness_score", 0.0)
-            evid_path = self._save_evidence_crop(frame, vehicle_box, tracking_id, "TINT_REVIEW")
-            notes = (
-                f"Experimental apparent window darkness of {darkness:.1f}% exceeds demonstration threshold "
-                f"({self.thresholds['dark_tint_threshold']}%). Flagged for physical officer inspection."
-            )
-            fine = self.fines.get("dark_tint_violation", 750)
-
-            v_id = self.db.add_violation(
-                vehicle_id=vehicle_id,
-                tracking_id=tracking_id,
-                violation_type="Dark Window Tint Review",
-                severity="Warning",
-                confidence=round(darkness / 100.0, 2),
-                evidence_path=evid_path,
-                status="Pending Review",
-                review_notes=notes
-            )
-            challan_ref = self.db.create_challan(
-                violation_id=v_id,
-                vehicle_plate=plate_number,
-                violation_type="Dark Window Tint Review",
-                fine_amount=fine,
-                evidence_path=evid_path,
-                notes=notes
-            )
-            generated_violations.append({
-                "violation_id": v_id,
-                "challan_ref": challan_ref,
-                "violation_type": "Dark Window Tint Review",
-                "severity": "Warning",
-                "status": "Pending Review",
-                "fine": fine,
-                "notes": notes,
-                "evidence_path": evid_path
-            })
-
-        # Rule 4: Mirror Visibility Assessment
-        if mirror_result and mirror_result.get("status") == "Mirror potentially obscured or not clearly visible":
-            vis_score = mirror_result.get("visibility_score", 0.0)
-            evid_path = self._save_evidence_crop(frame, vehicle_box, tracking_id, "MIRROR_OBSCURED")
-            notes = f"Exterior wing mirror region obscured or missing protrusion clarity (Clarity score: {vis_score:.1f}%)."
-            fine = self.fines.get("mirror_obscured", 500)
-
-            v_id = self.db.add_violation(
-                vehicle_id=vehicle_id,
-                tracking_id=tracking_id,
-                violation_type="Mirror Obscured",
-                severity="Review",
-                confidence=round(1.0 - (vis_score / 100.0), 2),
-                evidence_path=evid_path,
-                status="Under Investigation",
-                review_notes=notes
-            )
-            challan_ref = self.db.create_challan(
-                violation_id=v_id,
-                vehicle_plate=plate_number,
-                violation_type="Mirror Obscured",
-                fine_amount=fine,
-                evidence_path=evid_path,
-                notes=notes
-            )
-            generated_violations.append({
-                "violation_id": v_id,
-                "challan_ref": challan_ref,
-                "violation_type": "Mirror Obscured",
-                "severity": "Review",
-                "status": "Under Investigation",
-                "fine": fine,
-                "notes": notes,
-                "evidence_path": evid_path
-            })
+        # -------------------------------------------------------------
+        # 4. Optional Module: Wrong-Way Movement
+        # -------------------------------------------------------------
+        if self.wrong_way_enabled and tracked_object.frames_active > 5:
+            if tracked_object.direction != "stationary" and tracked_object.direction != self.expected_direction:
+                if not tracked_object.has_violation("Wrong-Way Movement"):
+                    evid_path = self._save_evidence_crop(frame, vbox, track_id, "WRONG_WAY")
+                    notes = f"Vehicle moving {tracked_object.direction.upper()} contrary to expected {self.expected_direction.upper()} traffic flow."
+                    event_id = self.storage.log_event(
+                        violation_category="Wrong-Way Movement",
+                        tracking_id=track_id,
+                        vehicle_type=vtype,
+                        confidence_score=0.88,
+                        evidence_path=evid_path,
+                        camera_source=camera_source,
+                        review_status="Pending Review",
+                        reviewer_notes=notes
+                    )
+                    tracked_object.mark_violation("Wrong-Way Movement")
+                    generated_violations.append({
+                        "event_id": event_id,
+                        "category": "Wrong-Way Movement",
+                        "confidence": 0.88,
+                        "evidence_path": evid_path,
+                        "notes": notes
+                    })
 
         return generated_violations
 
     def _save_evidence_crop(self, frame: np.ndarray, bbox: List[int],
-                            tracking_id: str, tag: str) -> str:
-        """Saves a high-resolution evidence crop to disk."""
-        crop = safe_crop(frame, bbox, margin=0.15)
-        # Add timestamp & watermark
-        cv2.putText(crop, f"VISION GUARD EVIDENCE | {tracking_id} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                    (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 255), 1, cv2.LINE_AA)
+                            track_id: str, tag: str) -> str:
+        """Crops the vehicle/violator with padding, stamps watermarks, and writes to disk."""
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = bbox
 
-        filename = f"EVID_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{tracking_id}_{tag}.jpg"
-        filepath = os.path.join(self.evidence_dir, filename)
-        cv2.imwrite(filepath, crop)
-        return filepath
+        # Margin
+        pad_x = int((x2 - x1) * 0.15)
+        pad_y = int((y2 - y1) * 0.15)
+        cx1 = max(0, x1 - pad_x)
+        cy1 = max(0, y1 - pad_y)
+        cx2 = min(w, x2 + pad_x)
+        cy2 = min(h, y2 + pad_y)
+
+        crop = frame[cy1:cy2, cx1:cx2].copy()
+        if crop.size == 0:
+            crop = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        # Watermark
+        t_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cv2.putText(crop, f"VISIONGUARD EVIDENCE | {track_id} | {t_str}",
+                    (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 255), 1, cv2.LINE_AA)
+
+        fname = f"EVID_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{track_id}_{tag}.jpg"
+        fpath = os.path.join(self.evidence_dir, fname)
+        cv2.imwrite(fpath, crop)
+        return fpath
